@@ -1,0 +1,75 @@
+{
+  "_comment": "Preset de configuração baseado na Especificação Técnica do Sistema DETR - Treinamento que funcionou muito bem",
+  "_version": "1.0",
+  "_date": "2026-01-24",
+  
+  "preset_name": "Especificação Técnica - DETR ResNet-50",
+  "description": "Configuração testada e validada que produziu excelentes resultados em treinamento e predição",
+  
+  "model": {
+    "model_name": "DETR ResNet-50",
+    "model_id": "facebook/detr-resnet-50",
+    "num_queries": 50,
+    "dropout": 0.1,
+    "auxiliary_loss": true,
+    "freeze_backbone": false
+  },
+  
+  "training": {
+    "epochs": 25,
+    "batch_size": 2,
+    "gradient_accumulation_steps": 4,
+    "effective_batch_size": 8,
+    "image_size": 640,
+    "num_workers": 4,
+    "seed": 42
+  },
+  
+  "optimization": {
+    "optimizer": "AdamW",
+    "learning_rate": 0.0001,
+    "lr_backbone": 0.00001,
+    "weight_decay": 0.0001,
+    "betas": [0.9, 0.999],
+    "max_grad_norm": 0.1
+  },
+  
+  "scheduler": {
+    "type": "cosine",
+    "warmup_steps": 500
+  },
+  
+  "loss_weights": {
+    "class_loss_coefficient": 1.0,
+    "bbox_loss_coefficient": 5.0,
+    "giou_loss_coefficient": 2.0,
+    "eos_coefficient": 0.1
+  },
+  
+  "augmentation": {
+    "augment_hflip": true,
+    "augment_color": true,
+    "augment_scale": true,
+    "augment_crop": true,
+    "use_augmentation": true
+  },
+  
+  "advanced": {
+    "fp16": true,
+    "bf16": false,
+    "gradient_checkpointing": true,
+    "compile_model": false,
+    "use_tf32": true
+  },
+  
+  "early_stopping": {
+    "patience": 7,
+    "enabled": true
+  },
+  
+  "logging": {
+    "log_steps": 50,
+    "eval_steps": 500,
+    "save_steps": 1000
+  }
+}

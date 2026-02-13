@@ -1,0 +1,10 @@
+{
+    "datasets_dir": "data/datasets",
+    "models_dir": "data/models/experiments",
+    "outputs_dir": "data/outputs",
+    "predictions_dir": "data/outputs/predictions",
+    "logs_dir": "data/logs",
+    "checkpoints_subdir": "checkpoints",
+    "model_best_subdir": "model_best",
+    "model_final_subdir": "model_final"
+}
