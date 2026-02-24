@@ -155,6 +155,12 @@ class DETRInference:
             scale
         )
         
+        # Garantir que a classe ref seja exibida apenas uma vez por frame
+        detections = self._enforce_single_ref_per_frame(detections)
+        
+        # NMS para ok e vazio: mitiga múltiplas detecções do mesmo objeto
+        detections = self._apply_nms_ok_vazio(detections)
+        
         return detections
     
     def _postprocess(
@@ -214,6 +220,76 @@ class DETRInference:
             })
         
         return detections
+    
+    def _enforce_single_ref_per_frame(
+        self,
+        detections: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Garante que a classe ref seja exibida apenas uma vez por frame.
+        Quando há múltiplas detecções ref, mantém apenas a de maior confiança.
+        
+        Best practice: NMS por classe para referência única (padrão em inspeção industrial).
+        """
+        ref_class_id = 1  # ref = índice 1 em FIXED_CLASSES
+        ref_detections = [d for d in detections if d["label"] == ref_class_id]
+        other_detections = [d for d in detections if d["label"] != ref_class_id]
+        
+        if len(ref_detections) <= 1:
+            return detections
+        
+        # Manter apenas a detecção ref com maior score
+        best_ref = max(ref_detections, key=lambda d: d["score"])
+        return other_detections + [best_ref]
+    
+    def _compute_iou(self, box1: List[int], box2: List[int]) -> float:
+        """Calcula IoU entre duas bboxes [x1, y1, x2, y2]."""
+        x1 = max(box1[0], box2[0])
+        y1 = max(box1[1], box2[1])
+        x2 = min(box1[2], box2[2])
+        y2 = min(box1[3], box2[3])
+        inter_area = max(0, x2 - x1) * max(0, y2 - y1)
+        a1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
+        a2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
+        union = a1 + a2 - inter_area
+        return inter_area / union if union > 0 else 0.0
+    
+    def _apply_nms_ok_vazio(
+        self,
+        detections: List[Dict[str, Any]],
+        iou_threshold: float = 0.5
+    ) -> List[Dict[str, Any]]:
+        """
+        Aplica NMS (Non-Maximum Suppression) nas classes ok e vazio.
+        Mitiga múltiplas detecções do mesmo objeto mantendo apenas a de maior confiança.
+        
+        Best practice: NMS por classe, padrão em detecção de objetos.
+        """
+        ok_class_id = 0
+        vazio_class_id = 2
+        ref_class_id = 1
+        
+        ref_dets = [d for d in detections if d["label"] == ref_class_id]
+        ok_dets = [d for d in detections if d["label"] == ok_class_id]
+        vazio_dets = [d for d in detections if d["label"] == vazio_class_id]
+        
+        def nms_per_class(dets: List[Dict]) -> List[Dict]:
+            if len(dets) <= 1:
+                return dets
+            sorted_dets = sorted(dets, key=lambda d: d["score"], reverse=True)
+            keep = []
+            for det in sorted_dets:
+                box = det["box"]
+                suppressed = False
+                for k in keep:
+                    if self._compute_iou(box, k["box"]) >= iou_threshold:
+                        suppressed = True
+                        break
+                if not suppressed:
+                    keep.append(det)
+            return keep
+        
+        return ref_dets + nms_per_class(ok_dets) + nms_per_class(vazio_dets)
     
     def filter_by_roi(
         self,

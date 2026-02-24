@@ -5,9 +5,10 @@ Sistema DETR - RTX 5080 Optimized
 import time
 import csv
 from pathlib import Path
-from typing import Callable, Optional, Dict, Any
+from typing import Callable, Optional, Dict, Any, List
 from datetime import datetime
 
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.optim import AdamW
@@ -26,6 +27,7 @@ from src.core.config import PATHS, ModelConfig
 from src.core.device_manager import device_manager
 from src.core.session import session, ExperimentConfig
 from src.data.coco_dataset import create_dataloaders
+from src.evaluation.metrics import compute_precision_recall_iou
 
 
 class DETRTrainer:
@@ -334,7 +336,7 @@ class DETRTrainer:
         self._load_model()
         
         # Criar dataloaders
-        train_loader, val_loader, _ = self._create_dataloaders()
+        train_loader, val_loader, test_loader = self._create_dataloaders()
         
         # Setup optimizer
         # Ajustar número de steps considerando gradient accumulation
@@ -404,6 +406,21 @@ class DETRTrainer:
                     logger.info(f"Early stopping ativado após {epoch+1} épocas")
                     logger.info(f"Melhor val loss: {self.best_loss:.4f}")
                     break
+            
+            # Métricas de predição no Test (precision, recall, IoU)
+            if test_loader:
+                test_metrics = self._evaluate_test_metrics(epoch, test_loader)
+                if test_metrics:
+                    logger.info(
+                        f"Test Epoch {epoch+1} | "
+                        f"Precision: {test_metrics['precision']:.4f} | "
+                        f"Recall: {test_metrics['recall']:.4f} | "
+                        f"IoU: {test_metrics['mean_iou']:.4f}"
+                    )
+                    if writer:
+                        writer.add_scalar("Test/precision", test_metrics["precision"], epoch)
+                        writer.add_scalar("Test/recall", test_metrics["recall"], epoch)
+                        writer.add_scalar("Test/mean_iou", test_metrics["mean_iou"], epoch)
             
             # Checkpoint periódico
             if (epoch + 1) % 5 == 0:
@@ -623,6 +640,146 @@ class DETRTrainer:
         logger.info(f"Validação Epoch {epoch+1} | Loss: {avg_loss:.4f}")
         
         return avg_loss
+    
+    def _postprocess_outputs_for_eval(
+        self,
+        outputs,
+        batch_idx: int,
+        image_size: int,
+        threshold: float = 0.05
+    ) -> List[Dict[str, Any]]:
+        """
+        Pós-processa outputs do modelo para avaliação.
+        Converte logits e pred_boxes em lista de detecções [image_id, category_id, bbox, score].
+        """
+        logits = outputs.logits  # [B, num_queries, num_classes]
+        boxes = outputs.pred_boxes  # [B, num_queries, 4] - [cx, cy, w, h] normalizado
+        
+        batch_size = logits.shape[0]
+        num_classes = self.model_config.NUM_CLASSES
+        
+        # Softmax
+        probs = torch.softmax(logits, dim=-1)
+        if probs.shape[-1] > num_classes:
+            scores, labels = probs[..., :-1].max(dim=-1)
+        else:
+            scores, labels = probs.max(dim=-1)
+        
+        all_detections = []
+        
+        for b in range(batch_size):
+            img_id = batch_idx * self.experiment.batch_size + b
+            mask = scores[b] > threshold
+            
+            for i in torch.where(mask)[0]:
+                score = float(scores[b, i].cpu())
+                label = int(labels[b, i].cpu())
+                cx, cy, w, h = boxes[b, i].cpu().numpy()
+                
+                # Converter [cx, cy, w, h] normalizado -> [x1, y1, x2, y2] em espaço image_size
+                cx_px = cx * image_size
+                cy_px = cy * image_size
+                w_px = w * image_size
+                h_px = h * image_size
+                x1 = max(0, cx_px - w_px / 2)
+                y1 = max(0, cy_px - h_px / 2)
+                x2 = min(image_size, cx_px + w_px / 2)
+                y2 = min(image_size, cy_px + h_px / 2)
+                
+                all_detections.append({
+                    "image_id": img_id,
+                    "category_id": label,
+                    "bbox": [float(x1), float(y1), float(x2), float(y2)],
+                    "score": score
+                })
+        
+        return all_detections
+    
+    def _targets_to_ground_truths(
+        self,
+        targets: List[Dict],
+        batch_idx: int,
+        batch_size: int,
+        image_size: int
+    ) -> List[Dict[str, Any]]:
+        """Converte targets do DataLoader em formato ground_truth para métricas."""
+        gts = []
+        for b, target in enumerate(targets):
+            img_id = batch_idx * self.experiment.batch_size + b
+            boxes = target["boxes"]  # [N, 4] - [cx, cy, w, h] normalizado
+            labels = target["labels"]  # [N]
+            
+            for i in range(boxes.shape[0]):
+                cx, cy, w, h = boxes[i].numpy()
+                cx_px = cx * image_size
+                cy_px = cy * image_size
+                w_px = w * image_size
+                h_px = h * image_size
+                x1 = max(0, cx_px - w_px / 2)
+                y1 = max(0, cy_px - h_px / 2)
+                x2 = min(image_size, cx_px + w_px / 2)
+                y2 = min(image_size, cy_px + h_px / 2)
+                
+                gts.append({
+                    "image_id": img_id,
+                    "category_id": int(labels[i].numpy()),
+                    "bbox": [float(x1), float(y1), float(x2), float(y2)]
+                })
+        return gts
+    
+    def _evaluate_test_metrics(
+        self,
+        epoch: int,
+        test_loader
+    ) -> Optional[Dict[str, float]]:
+        """
+        Avalia o modelo no conjunto Test e retorna precision, recall e mean IoU.
+        Utiliza dados do diretório Test conforme especificação.
+        """
+        self.model.eval()
+        image_size = self.experiment.image_size
+        threshold = getattr(self.experiment, 'eval_threshold', 0.5)
+        iou_threshold = 0.5
+        
+        all_predictions: List[Dict[str, Any]] = []
+        all_ground_truths: List[Dict[str, Any]] = []
+        batch_size = self.experiment.batch_size
+        
+        with torch.no_grad():
+            for batch_idx, (images, targets) in enumerate(test_loader):
+                images = images.to(self.device)
+                
+                if self.use_amp:
+                    with autocast('cuda', dtype=self.amp_dtype):
+                        outputs = self.model(pixel_values=images)
+                else:
+                    outputs = self.model(pixel_values=images)
+                
+                preds = self._postprocess_outputs_for_eval(
+                    outputs, batch_idx, image_size, threshold
+                )
+                all_predictions.extend(preds)
+                
+                gts = self._targets_to_ground_truths(
+                    targets, batch_idx, images.shape[0], image_size
+                )
+                all_ground_truths.extend(gts)
+        
+        if not all_ground_truths:
+            logger.warning("Test set vazio ou sem anotações")
+            return None
+        
+        precision, recall, mean_iou = compute_precision_recall_iou(
+            all_predictions,
+            all_ground_truths,
+            iou_threshold=iou_threshold
+        )
+        
+        return {
+            "precision": precision,
+            "recall": recall,
+            "mean_iou": mean_iou
+        }
     
     def _save_checkpoint(self, filename: str, epoch: int, loss: float):
         """Salva checkpoint."""

@@ -112,6 +112,7 @@ class ExperimentConfig:
     log_steps: int = 50  # Intervalo de logging (conforme especificação técnica)
     eval_steps: int = 500  # Intervalo de avaliação
     save_steps: int = 1000  # Intervalo de salvamento
+    eval_threshold: float = 0.5  # Threshold de confiança para métricas Test (precision/recall coerentes)
     
     # Timestamps
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
