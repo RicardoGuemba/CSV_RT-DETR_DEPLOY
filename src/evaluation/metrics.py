@@ -113,3 +113,41 @@ def compute_precision_recall_iou(
     mean_iou = float(np.mean(matched_ious)) if matched_ious else 0.0
     
     return precision, recall, mean_iou
+
+
+def compute_precision_recall_iou_per_class(
+    predictions: List[Dict[str, Any]],
+    ground_truths: List[Dict[str, Any]],
+    class_names: List[str],
+    iou_threshold: float = 0.5
+) -> Dict[str, Dict[str, float]]:
+    """
+    Calcula Precision, Recall e Mean IoU por classe.
+    
+    Args:
+        predictions: Lista de dicts com image_id, category_id, bbox, score
+        ground_truths: Lista de dicts com image_id, category_id, bbox
+        class_names: Nomes das classes na ordem dos IDs (ex: ["ok", "ref", "vazio"])
+        iou_threshold: Threshold de IoU para match
+    
+    Returns:
+        Dict[class_name, {"precision": float, "recall": float, "mean_iou": float}]
+    """
+    num_classes = len(class_names)
+    result = {}
+    
+    for class_id in range(num_classes):
+        class_name = class_names[class_id]
+        cls_preds = [p for p in predictions if p["category_id"] == class_id]
+        cls_gts = [g for g in ground_truths if g["category_id"] == class_id]
+        
+        prec, rec, miou = compute_precision_recall_iou(
+            cls_preds, cls_gts, iou_threshold=iou_threshold
+        )
+        result[class_name] = {
+            "precision": prec,
+            "recall": rec,
+            "mean_iou": miou
+        }
+    
+    return result

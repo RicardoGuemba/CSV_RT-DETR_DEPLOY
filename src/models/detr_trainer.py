@@ -27,7 +27,7 @@ from src.core.config import PATHS, ModelConfig
 from src.core.device_manager import device_manager
 from src.core.session import session, ExperimentConfig
 from src.data.coco_dataset import create_dataloaders
-from src.evaluation.metrics import compute_precision_recall_iou
+from src.evaluation.metrics import compute_precision_recall_iou_per_class
 
 
 class DETRTrainer:
@@ -407,20 +407,22 @@ class DETRTrainer:
                     logger.info(f"Melhor val loss: {self.best_loss:.4f}")
                     break
             
-            # Métricas de predição no Test (precision, recall, IoU)
+            # Métricas de predição no Test por classe (precision, recall, IoU)
             if test_loader:
                 test_metrics = self._evaluate_test_metrics(epoch, test_loader)
-                if test_metrics:
-                    logger.info(
-                        f"Test Epoch {epoch+1} | "
-                        f"Precision: {test_metrics['precision']:.4f} | "
-                        f"Recall: {test_metrics['recall']:.4f} | "
-                        f"IoU: {test_metrics['mean_iou']:.4f}"
-                    )
+                if test_metrics and test_metrics.get("per_class"):
+                    logger.info(f"Test Epoch {epoch+1} | Métricas por classe:")
+                    for class_name, m in test_metrics["per_class"].items():
+                        logger.info(
+                            f"  {class_name}: Precision={m['precision']:.4f} | "
+                            f"Recall={m['recall']:.4f} | IoU={m['mean_iou']:.4f}"
+                        )
                     if writer:
-                        writer.add_scalar("Test/precision", test_metrics["precision"], epoch)
-                        writer.add_scalar("Test/recall", test_metrics["recall"], epoch)
-                        writer.add_scalar("Test/mean_iou", test_metrics["mean_iou"], epoch)
+                        for class_name, m in test_metrics["per_class"].items():
+                            safe = class_name.replace(" ", "_")
+                            writer.add_scalar(f"Test/{safe}/precision", m["precision"], epoch)
+                            writer.add_scalar(f"Test/{safe}/recall", m["recall"], epoch)
+                            writer.add_scalar(f"Test/{safe}/mean_iou", m["mean_iou"], epoch)
             
             # Checkpoint periódico
             if (epoch + 1) % 5 == 0:
@@ -769,17 +771,15 @@ class DETRTrainer:
             logger.warning("Test set vazio ou sem anotações")
             return None
         
-        precision, recall, mean_iou = compute_precision_recall_iou(
+        class_names = self.model_config.FIXED_CLASSES
+        per_class = compute_precision_recall_iou_per_class(
             all_predictions,
             all_ground_truths,
+            class_names=class_names,
             iou_threshold=iou_threshold
         )
         
-        return {
-            "precision": precision,
-            "recall": recall,
-            "mean_iou": mean_iou
-        }
+        return {"per_class": per_class}
     
     def _save_checkpoint(self, filename: str, epoch: int, loss: float):
         """Salva checkpoint."""

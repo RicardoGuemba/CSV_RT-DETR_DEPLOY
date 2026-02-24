@@ -161,6 +161,9 @@ class DETRInference:
         # NMS para ok e vazio: mitiga múltiplas detecções do mesmo objeto
         detections = self._apply_nms_ok_vazio(detections)
         
+        # Exibir apenas classes ok e vazio (ref não é exibida na predição)
+        detections = self._filter_display_classes(detections)
+        
         return detections
     
     def _postprocess(
@@ -290,6 +293,18 @@ class DETRInference:
             return keep
         
         return ref_dets + nms_per_class(ok_dets) + nms_per_class(vazio_dets)
+    
+    def _filter_display_classes(
+        self,
+        detections: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Mantém apenas as classes ok e vazio para exibição na predição.
+        A classe ref não é exibida (uso interno/referência).
+        """
+        ok_class_id = 0
+        vazio_class_id = 2
+        return [d for d in detections if d["label"] in (ok_class_id, vazio_class_id)]
     
     def filter_by_roi(
         self,
