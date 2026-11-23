@@ -1,4 +1,4 @@
-# 🎯 Sistema DETR - Sistema de Detecção de Objetos
+# Treinamento e avaliação de detectores DETR em GPU
 
 Sistema desktop completo para detecção de objetos usando modelos DETR (DEtection TRansformer), otimizado para **NVIDIA RTX 5080** com arquitetura Blackwell.
 
@@ -6,6 +6,11 @@ Sistema desktop completo para detecção de objetos usando modelos DETR (DEtecti
 ![PyTorch](https://img.shields.io/badge/PyTorch-2.2+-red.svg)
 ![CUDA](https://img.shields.io/badge/CUDA-12.1+-green.svg)
 ![License](https://img.shields.io/badge/License-MIT-yellow.svg)
+
+**Arquivos de referência**
+
+- [main.py](main.py)
+- [requirements.txt](requirements.txt)
 
 ## ✨ Funcionalidades
 
